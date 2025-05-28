@@ -131,33 +131,171 @@ EXAMPLE OUTPUT:
 """
         return {"role": "system", "content": crypto_prompt}
 
-    def _prepare_request_params(self, use_web_search: bool = None) -> Dict[str, Any]:
+
+    def analyze_tweets(
+            self,
+            tweets: List,
+            use_web_search: Optional[bool] = None,
+            retry_count: int = 3
+    ) -> List:
         """
-        Подготовка параметров запроса к API.
+        Анализ твитов с помощью Grok API.
 
         Args:
+            tweets: Список твитов для анализа
             use_web_search: Использовать ли веб-поиск
+            retry_count: Количество попыток при ошибке
 
         Returns:
-            Словарь параметров запроса
+            Список результатов анализа
         """
-        use_search = use_web_search if use_web_search is not None else self.config.use_web_search
+        if not tweets:
+            return []
 
+        # Импортируем исключения
+        from ..utils.exceptions import GrokAPIError, ErrorCode, handle_exception
+
+        # Подготавливаем данные для анализа
+        tweet_data = [{"text": tweet.text if hasattr(tweet, 'text') else str(tweet)} for tweet in tweets]
+        tweets_json = json.dumps(tweet_data, ensure_ascii=False)
+
+        messages = [
+            self.system_prompt,
+            {"role": "user", "content": tweets_json}
+        ]
+
+        request_params = self._prepare_request_params(use_web_search)
+        request_params["messages"] = messages
+
+        print(f"Analyzing {len(tweets)} tweets with Grok API")
+
+        # Повторные попытки при ошибках
+        last_error = None
+        for attempt in range(retry_count):
+            try:
+                start_time = time.time()
+
+                response = self.client.chat.completions.create(**request_params)
+
+                processing_time = time.time() - start_time
+                print(f"API call completed in {processing_time:.2f}s")
+
+                if not response.choices or not response.choices[0].message.content:
+                    raise GrokAPIError(
+                        "Empty response from Grok API",
+                        code=ErrorCode.GROK_INVALID_RESPONSE
+                    )
+
+                response_content = response.choices[0].message.content.strip()
+
+                # Парсим и валидируем ответ
+                response_json = self._extract_json_from_response(response_content)
+                results = self._validate_and_convert_results(response_json)
+
+                print(f"Successfully analyzed {len(results)} tweets")
+
+                # Дополняем результаты если их меньше чем твитов
+                while len(results) < len(tweets):
+                    results.append({
+                        "type": "others",
+                        "title": "",
+                        "description": ""
+                    })
+
+                return results
+
+            except Exception as e:
+                last_error = e
+                print(f"Attempt {attempt + 1} failed: {e}")
+
+                if attempt < retry_count - 1:
+                    sleep_time = 2 ** attempt  # Exponential backoff
+                    print(f"Retrying in {sleep_time} seconds...")
+                    time.sleep(sleep_time)
+
+        # Если все попытки неудачны, преобразуем ошибку
+        if isinstance(last_error, Exception):
+            # Определяем код ошибки по типу
+            if "timeout" in str(last_error).lower():
+                error_code = ErrorCode.GROK_TIMEOUT
+            elif "connection" in str(last_error).lower():
+                error_code = ErrorCode.GROK_CONNECTION_ERROR
+            elif "rate limit" in str(last_error).lower():
+                error_code = ErrorCode.GROK_RATE_LIMITED
+            elif "quota" in str(last_error).lower():
+                error_code = ErrorCode.GROK_QUOTA_EXCEEDED
+            elif "auth" in str(last_error).lower() or "401" in str(last_error):
+                error_code = ErrorCode.GROK_AUTH_FAILED
+            else:
+                error_code = ErrorCode.GROK_NETWORK_ERROR
+
+            converted_error = GrokAPIError(
+                f"Failed to analyze tweets after {retry_count} attempts: {last_error}",
+                code=error_code,
+                original_error=last_error,
+                retry_possible=error_code in [ErrorCode.GROK_TIMEOUT, ErrorCode.GROK_NETWORK_ERROR,
+                                              ErrorCode.GROK_RATE_LIMITED]
+            )
+            raise converted_error
+
+        # Fallback на случай непредвиденной ошибки
+        raise GrokAPIError(
+            f"Failed to analyze tweets after {retry_count} attempts",
+            code=ErrorCode.GROK_NETWORK_ERROR
+        )
+
+    def test_connection(self) -> bool:
+        """
+        Тестирование подключения к Grok API.
+
+        Returns:
+            True если подключение успешно
+        """
+        try:
+            from ..utils.exceptions import GrokAPIError, ErrorCode
+
+            print("Testing Grok API connection...")
+
+            # Создаем тестовый твит
+            test_tweet = type('TestTweet', (), {'text': 'Test connection to Grok API'})()
+
+            # Простой тест запрос
+            messages = [
+                {"role": "system",
+                 "content": "Return valid JSON array with one object: [{\"type\": \"test\", \"title\": \"Test\", \"description\": \"Test message\"}]"},
+                {"role": "user", "content": "Test"}
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.config.model_name,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=100,
+                timeout=10  # Короткий таймаут для теста
+            )
+
+            if response.choices and response.choices[0].message.content:
+                print("✓ Grok API connection successful")
+                return True
+            else:
+                print("✗ Grok API returned empty response")
+                return False
+
+        except Exception as e:
+            print(f"API connection test failed: {e}")
+            return False
+
+    def _prepare_request_params(self, use_web_search: bool = None) -> Dict[str, Any]:
+        """Подготовка параметров запроса к API."""
         params = {
             "model": self.config.model_name,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
-            "response_format": {"type": "json_object"}
         }
 
-        # Добавляем параметры Live Search если включено
-        if use_search:
-            params["search_parameters"] = {
-                "mode": "auto",
-                "max_search_results": 5,
-                "include_citations": False
-            }
-            self.logger.info("Web search enabled for analysis")
+        # ИСПРАВЛЕНИЕ: Убираем неподдерживаемый параметр
+        if use_web_search:
+            print("⚠️  Web search not yet supported by current API version")
 
         return params
 
@@ -170,14 +308,13 @@ EXAMPLE OUTPUT:
 
         Returns:
             Список словарей с результатами анализа
-
-        Raises:
-            GrokAPIError: При ошибке парсинга JSON
         """
+        from ..utils.exceptions import GrokAPIError, ErrorCode
+
         try:
             response_json = json.loads(response_content)
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Initial JSON decode failed: {e}")
+            print(f"Initial JSON decode failed: {e}")
 
             # Попытка извлечь JSON из ответа
             json_start = response_content.find('[')
@@ -187,20 +324,32 @@ EXAMPLE OUTPUT:
                 try:
                     json_content = response_content[json_start:json_end]
                     response_json = json.loads(json_content)
-                    self.logger.info("Successfully extracted JSON from response")
+                    print("Successfully extracted JSON from response")
                 except json.JSONDecodeError:
-                    self.logger.error(f"Failed to extract JSON. Response sample: {response_content[:200]}...")
-                    raise GrokAPIError(f"Invalid JSON format in response: {e}")
+                    print(f"Failed to extract JSON. Response sample: {response_content[:200]}...")
+                    raise GrokAPIError(
+                        f"Invalid JSON format in response: {e}",
+                        code=ErrorCode.GROK_JSON_PARSE_ERROR,
+                        response_data={"raw_response": response_content[:500]}
+                    )
             else:
-                self.logger.error(f"No valid JSON array found. Response sample: {response_content[:200]}...")
-                raise GrokAPIError(f"No valid JSON found in response: {e}")
+                print(f"No valid JSON array found. Response sample: {response_content[:200]}...")
+                raise GrokAPIError(
+                    f"No valid JSON found in response: {e}",
+                    code=ErrorCode.GROK_JSON_PARSE_ERROR,
+                    response_data={"raw_response": response_content[:500]}
+                )
 
         if not isinstance(response_json, list):
-            raise GrokAPIError("Response is not a JSON array")
+            raise GrokAPIError(
+                "Response is not a JSON array",
+                code=ErrorCode.GROK_INVALID_RESPONSE,
+                response_data={"response_type": type(response_json).__name__}
+            )
 
         return response_json
 
-    def _validate_and_convert_results(self, response_json: List[Dict[str, Any]]) -> List[TweetAnalysis]:
+    def _validate_and_convert_results(self, response_json: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         """
         Валидация и преобразование результатов анализа.
 
@@ -208,115 +357,36 @@ EXAMPLE OUTPUT:
             response_json: JSON ответ от API
 
         Returns:
-            Список объектов TweetAnalysis
+            Список словарей с результатами
         """
         results = []
         required_fields = ["type", "title", "description"]
 
         for i, item in enumerate(response_json):
             if not isinstance(item, dict):
-                self.logger.warning(f"Item {i} is not a dictionary, skipping")
+                print(f"Item {i} is not a dictionary, skipping")
                 continue
 
             # Проверяем и добавляем отсутствующие поля
             for field in required_fields:
                 if field not in item:
-                    self.logger.warning(f"Item {i} missing field '{field}', adding default")
+                    print(f"Item {i} missing field '{field}', adding default")
                     item[field] = ""
 
             # Очищаем и валидируем данные
             try:
-                analysis = TweetAnalysis(
-                    type=str(item["type"]).strip(),
-                    title=str(item["title"]).strip(),
-                    description=str(item["description"]).strip()
-                )
-                results.append(analysis)
-            except (ValueError, ValidationError) as e:
-                self.logger.warning(f"Failed to create TweetAnalysis for item {i}: {e}")
+                result = {
+                    "type": str(item["type"]).strip(),
+                    "title": str(item["title"]).strip(),
+                    "description": str(item["description"]).strip()
+                }
+                results.append(result)
+            except Exception as e:
+                print(f"Failed to process item {i}: {e}")
                 # Добавляем дефолтный результат
-                results.append(TweetAnalysis(type="others", title="", description=""))
+                results.append({"type": "others", "title": "", "description": ""})
 
         return results
-
-    def analyze_tweets(
-        self,
-        tweets: List[Tweet],
-        use_web_search: Optional[bool] = None,
-        retry_count: int = 3
-    ) -> List[TweetAnalysis]:
-        """
-        Анализ твитов с помощью Grok API.
-
-        Args:
-            tweets: Список твитов для анализа
-            use_web_search: Использовать ли веб-поиск
-            retry_count: Количество попыток при ошибке
-
-        Returns:
-            Список результатов анализа
-
-        Raises:
-            GrokAPIError: При ошибке API
-        """
-        if not tweets:
-            return []
-
-        # Подготавливаем данные для анализа
-        tweet_data = [{"text": tweet.text} for tweet in tweets]
-        tweets_json = json.dumps(tweet_data, ensure_ascii=False)
-
-        messages = [
-            self.system_prompt,
-            {"role": "user", "content": tweets_json}
-        ]
-
-        request_params = self._prepare_request_params(use_web_search)
-        request_params["messages"] = messages
-
-        self.logger.info(f"Analyzing {len(tweets)} tweets with Grok API")
-
-        # Повторные попытки при ошибках
-        last_error = None
-        for attempt in range(retry_count):
-            try:
-                start_time = time.time()
-
-                response = self.client.chat.completions.create(**request_params)
-
-                processing_time = time.time() - start_time
-                self.logger.info(f"API call completed in {processing_time:.2f}s")
-
-                if not response.choices or not response.choices[0].message.content:
-                    raise GrokAPIError("Empty response from Grok API")
-
-                response_content = response.choices[0].message.content.strip()
-                self.logger.debug(f"Response length: {len(response_content)} characters")
-
-                # Парсим и валидируем ответ
-                response_json = self._extract_json_from_response(response_content)
-                results = self._validate_and_convert_results(response_json)
-
-                self.logger.info(f"Successfully analyzed {len(results)} tweets")
-
-                # Дополняем результаты если их меньше чем твитов
-                while len(results) < len(tweets):
-                    results.append(TweetAnalysis(type="others", title="", description=""))
-
-                return results
-
-            except Exception as e:
-                last_error = e
-                self.logger.warning(f"Attempt {attempt + 1} failed: {e}")
-
-                if attempt < retry_count - 1:
-                    sleep_time = 2 ** attempt  # Exponential backoff
-                    self.logger.info(f"Retrying in {sleep_time} seconds...")
-                    time.sleep(sleep_time)
-
-        # Если все попытки неудачны
-        self.logger.error(f"All {retry_count} attempts failed. Last error: {last_error}")
-        raise GrokAPIError(f"Failed to analyze tweets after {retry_count} attempts: {last_error}")
 
     def analyze_single_tweet(self, tweet: Tweet, use_web_search: Optional[bool] = None) -> TweetAnalysis:
         """
@@ -332,17 +402,3 @@ EXAMPLE OUTPUT:
         results = self.analyze_tweets([tweet], use_web_search)
         return results[0] if results else TweetAnalysis(type="others", title="", description="")
 
-    def test_connection(self) -> bool:
-        """
-        Тестирование подключения к Grok API.
-
-        Returns:
-            True если подключение успешно
-        """
-        try:
-            test_tweet = Tweet(id=0, url="test", text="Test tweet for connection")
-            result = self.analyze_single_tweet(test_tweet, use_web_search=False)
-            return result is not None
-        except Exception as e:
-            self.logger.error(f"API connection test failed: {e}")
-            return False

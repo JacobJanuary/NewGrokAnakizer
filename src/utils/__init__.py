@@ -1,13 +1,25 @@
 """Утилиты и вспомогательные функции."""
 
-# TODO: Раскомментировать после создания файлов
-# from .exceptions import (
-#     CryptoAnalyzerError,
-#     ConfigError,
-#     DatabaseError,
-#     GrokAPIError,
-#     TelegramError
-# )
-# from .logger import setup_logger, get_logger
+from .exceptions import (
+    CryptoAnalyzerError,
+    ConfigError,
+    DatabaseError,
+    GrokAPIError,
+    TelegramError,
+    ValidationError,
+    ProcessingError
+)
+from .logger import setup_logger, get_logger
 
-__all__ = []
+__all__ = [
+    "CryptoAnalyzerError",
+    "ConfigError",
+    "DatabaseError",
+    "GrokAPIError",
+    "TelegramError",
+    "ValidationError",
+    "ProcessingError",
+    "setup_logger",
+    "get_logger"
+]
+

@@ -75,19 +75,28 @@ class DatabaseManager:
                     FROM tweets 
                     WHERE created_at >= NOW() - INTERVAL %s HOUR 
                     AND isGrok IS NULL
+                    AND tweet_text IS NOT NULL
+                    AND TRIM(tweet_text) != ''
+                    AND LENGTH(TRIM(tweet_text)) >= 10
+                    AND tweet_text NOT LIKE 'RT @%'
                 """
                 cursor.execute(count_query, (hours,))
                 total_count = cursor.fetchone()[0]
 
                 # Получаем неанализированные твиты
+                # Добавьте фильтры в SQL запрос:
                 query = """
-                    SELECT id, url, tweet_text, created_at
-                    FROM tweets 
-                    WHERE created_at >= NOW() - INTERVAL %s HOUR 
-                    AND isGrok IS NULL 
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                """
+                        SELECT id, url, tweet_text, created_at
+                        FROM tweets
+                        WHERE created_at >= NOW() - INTERVAL %s HOUR
+                          AND isGrok IS NULL
+                          AND tweet_text IS NOT NULL
+                          AND TRIM(tweet_text) != ''
+                    AND LENGTH(TRIM(tweet_text)) >= 10
+                    AND tweet_text NOT LIKE 'RT @%'
+                        ORDER BY created_at DESC
+                            LIMIT %s \
+                        """
 
                 cursor.execute(query, (hours, limit))
                 rows = cursor.fetchall()
