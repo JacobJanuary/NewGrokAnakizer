@@ -70,7 +70,7 @@ class TestTelegramPublisher(unittest.TestCase):
 
         self.assertEqual(len(valuable_items), 2)  # Только новость и анализ
         self.assertEqual(valuable_items[0][1].type, "trueNews")
-        self.assertEqual(valuable_items[1][1].type, "analitics")
+        self.assertEqual(valuable_items[1][1].type, "analytics")
 
     def test_split_into_messages_single_message(self):
         """Тест разбиения на сообщения - одно сообщение."""

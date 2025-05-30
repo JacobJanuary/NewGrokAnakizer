@@ -74,7 +74,7 @@ class DatabaseManager:
                     SELECT COUNT(*) 
                     FROM tweets 
                     WHERE created_at >= NOW() - INTERVAL %s HOUR 
-                    AND isGrok IS NULL
+                    AND isGrok = 0
                     AND tweet_text IS NOT NULL
                     AND TRIM(tweet_text) != ''
                     AND LENGTH(TRIM(tweet_text)) >= 10
@@ -89,7 +89,7 @@ class DatabaseManager:
                         SELECT id, url, tweet_text, created_at
                         FROM tweets
                         WHERE created_at >= NOW() - INTERVAL %s HOUR
-                          AND isGrok IS NULL
+                          AND isGrok = 0
                           AND tweet_text IS NOT NULL
                           AND TRIM(tweet_text) != ''
                     AND LENGTH(TRIM(tweet_text)) >= 10

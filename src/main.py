@@ -106,15 +106,34 @@ class CryptoNewsAnalyzer:
             stats.processed_tweets = len(results)
 
             # Подсчитываем статистику
-            for result in results:
-                if result.type == "isSpam":
-                    stats.spam_tweets += 1
-                elif result.type == "isFlood":
-                    stats.flood_tweets += 1
-                elif result.type == "alreadyPosted":
-                    stats.duplicate_tweets += 1
-                elif result.is_valuable:
-                    stats.valuable_tweets += 1
+            for i, result in enumerate(results):
+                print(f"DEBUG: Result {i} type: {type(result)}, value: {result}")
+
+                # Проверяем тип объекта перед доступом к атрибутам
+                if isinstance(result, dict):
+                    print(f"WARNING: Result {i} is a dict, converting to TweetAnalysis")
+                    # Конвертируем словарь в объект TweetAnalysis
+                    from .database.models import TweetAnalysis
+                    result = TweetAnalysis(
+                        type=result.get("type", "others"),
+                        title=result.get("title", ""),
+                        description=result.get("description", "")
+                    )
+                    results[i] = result  # Заменяем в списке
+
+                # Теперь безопасно обращаемся к атрибутам
+                if hasattr(result, 'type'):
+                    if result.type == "isSpam":
+                        stats.spam_tweets += 1
+                    elif result.type == "isFlood":
+                        stats.flood_tweets += 1
+                    elif result.type == "alreadyPosted":
+                        stats.duplicate_tweets += 1
+                    elif result.is_valuable:
+                        stats.valuable_tweets += 1
+                else:
+                    print(f"ERROR: Result {i} has no 'type' attribute: {result}")
+                    stats.error_count += 1
 
             # Сохраняем результаты
             self.db_manager.save_analysis_results(tweets, results)

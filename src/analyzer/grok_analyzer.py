@@ -98,10 +98,10 @@ STEP 3: Content Classification
     - "fakeNews": unverified info, rumors (e.g., "Rumor: SEC to approve Bitcoin ETF soon")
     - "inside": insider information (e.g., "My source at company X reports upcoming partnership")
     - "tutorial": educational material (e.g., "How to set up MetaMask for Ethereum")
-    - "analitics": technical analysis (e.g., "BTC forms double bottom on 4H chart")
+    - "analytics": technical analysis (e.g., "BTC forms double bottom on 4H chart")
     - "trading": trading idea (e.g., "Considering ETH entry at $1800")
     - "others": other valuable tweets not fitting above categories
-- If ambiguous, prioritize: trueNews > inside > analitics > trading > tutorial > fakeNews > others
+- If ambiguous, prioritize: trueNews > inside > analytics > trading > tutorial > fakeNews > others
 
 STEP 4: Title and Description Generation
 - For valuable tweets:
@@ -126,7 +126,7 @@ EXAMPLE OUTPUT:
 [
     {"type": "trueNews", "title": "Листинг XRP", "description": "Binance объявила о листинге XRP. Торговля начнется завтра."},
     {"type": "isSpam", "title": "", "description": ""},
-    {"type": "analitics", "title": "BTC дно", "description": "Bitcoin формирует двойное дно на 4-часовом графике. Возможен отскок."}
+    {"type": "analytics", "title": "BTC дно", "description": "Bitcoin формирует двойное дно на 4-часовом графике. Возможен отскок."}
 ]
 """
         return {"role": "system", "content": crypto_prompt}
@@ -195,12 +195,9 @@ EXAMPLE OUTPUT:
                 print(f"Successfully analyzed {len(results)} tweets")
 
                 # Дополняем результаты если их меньше чем твитов
+                from ..database.models import TweetAnalysis
                 while len(results) < len(tweets):
-                    results.append({
-                        "type": "others",
-                        "title": "",
-                        "description": ""
-                    })
+                    results.append(TweetAnalysis(type="others", title="", description=""))
 
                 return results
 
@@ -349,16 +346,18 @@ EXAMPLE OUTPUT:
 
         return response_json
 
-    def _validate_and_convert_results(self, response_json: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    Fix for GrokAnalyzer - Update the _validate_and_convert_results method to return TweetAnalysis objects instead of dictionaries.
+
+    Replace the _validate_and_convert_results method in src/analyzer/grok_analyzer.py with this version:
+    """
+
+    def _validate_and_convert_results(self, response_json: List[Dict[str, Any]]) -> List:
         """
         Валидация и преобразование результатов анализа.
-
-        Args:
-            response_json: JSON ответ от API
-
-        Returns:
-            Список словарей с результатами
         """
+        from ..database.models import TweetAnalysis
+
         results = []
         required_fields = ["type", "title", "description"]
 
@@ -373,18 +372,18 @@ EXAMPLE OUTPUT:
                     print(f"Item {i} missing field '{field}', adding default")
                     item[field] = ""
 
-            # Очищаем и валидируем данные
+            # Создаем объект TweetAnalysis
             try:
-                result = {
-                    "type": str(item["type"]).strip(),
-                    "title": str(item["title"]).strip(),
-                    "description": str(item["description"]).strip()
-                }
-                results.append(result)
+                analysis = TweetAnalysis(
+                    type=str(item["type"]).strip(),
+                    title=str(item["title"]).strip(),
+                    description=str(item["description"]).strip()
+                )
+                results.append(analysis)
+                print(f"Created TweetAnalysis object {i}: type={analysis.type}")
             except Exception as e:
                 print(f"Failed to process item {i}: {e}")
-                # Добавляем дефолтный результат
-                results.append({"type": "others", "title": "", "description": ""})
+                results.append(TweetAnalysis(type="others", title="", description=""))
 
         return results
 
